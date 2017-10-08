@@ -44,8 +44,7 @@ type DelayedHttpRequest struct {
 	Body     string `json:"body"`
 	Params   [] HttpParameter `json:"params"`
 	Headers  [] HttpHeader `json:"headers"`
-	Response Response
-	TTL 	 int64	`json:"ttl"`
+	Response Response `json:"response"`
 	Status   int    `json:"status"`
 }
 
@@ -64,7 +63,6 @@ func (this *ResponseDelayedHttpRequestList) loadResponse(guid string, resp []byt
 	}
 }
 
-var requests = ResponseHttpRequestList{}
 var delayedReqs = ResponseDelayedHttpRequestList{}
 
 func main() {
