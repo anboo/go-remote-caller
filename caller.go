@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/gorilla/mux"
 	"github.com/twinj/uuid"
+	"net/http/pprof"
 	"net/http"
 	"log"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"bytes"
 	"strconv"
 	"fmt"
+	"io/ioutil"
 )
 
 type HttpParameter struct {
@@ -50,87 +52,108 @@ type DelayedHttpRequest struct {
 type ResponseHttpRequestList []HttpRequest
 type ResponseDelayedHttpRequestList map[string]*DelayedHttpRequest
 
-func (this *ResponseDelayedHttpRequestList) loadResponse(guid string, resp string) {
+func (this *ResponseDelayedHttpRequestList) loadResponse(guid string, resp []byte) {
 	//current := &this[guid]
 
 	for _, current := range *this {
 		if current.GUID == guid {
 			current.Response = Response{
-				Body: resp,
+				Body: string(resp),
 			}
 		}
 	}
 }
 
 var requests = ResponseHttpRequestList{}
-var delayedRequests = ResponseDelayedHttpRequestList{}
+var delayedReqs = ResponseDelayedHttpRequestList{}
 
 func main() {
-	router := mux.NewRouter().StrictSlash(true)
+	r := mux.NewRouter().StrictSlash(true)
 
-	router.HandleFunc("/v1/request", IndexAction)
-	router.HandleFunc("/v1/request/handle", HandleAction)
-	router.HandleFunc("/v1/request/register", RegisterAction)
-	router.HandleFunc("/v1/request/{guid}/response", ResponseAction)
+	r.HandleFunc("/debug/pprof/", pprof.Index)
+	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	r.NewRoute().PathPrefix("/debug/pprof/").HandlerFunc(pprof.Index)
+
+	r.HandleFunc("/v1/request", IndexAction)
+	r.HandleFunc("/v1/request/handle", HandleAction)
+	r.HandleFunc("/v1/request/register", RegisterAction)
+	r.HandleFunc("/v1/request/{guid}/response", ResponseAction)
 
 	//go func() {
-	log.Println(http.ListenAndServe(":8080", router))
+	log.Println(http.ListenAndServe(":8080", r))
 }
 
 func IndexAction(w http.ResponseWriter, r *http.Request) {
-	var response = map[string]interface{} {"count": len(delayedRequests), "items": delayedRequests}
+	var res = map[string]interface{} {"count": len(delayedReqs), "items": delayedReqs}
 
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(res)
+	r.Body.Close()
 }
 
 func HandleAction(w http.ResponseWriter, r *http.Request) {
-	newRequest := HttpRequest{}
-	json.NewDecoder(r.Body).Decode(&newRequest)
+	newReq := HttpRequest{}
 
-	response, err := handleRequest(newRequest.Method, newRequest.Uri, newRequest.Params, newRequest.Headers)
-
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+	err := json.NewDecoder(r.Body).Decode(&newReq); if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Print(err)
 		return
 	}
 
-	w.Write(bytes.NewBufferString(response).Bytes())
+	res, err := handleRequest(newReq.Method, newReq.Uri, newReq.Params, newReq.Headers)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Print(err)
+		return
+	}
+
+	w.Write(res)
+	r.Body.Close()
 }
 
 func RegisterAction(w http.ResponseWriter, r *http.Request) {
-	newRequest := DelayedHttpRequest{}
-	newRequest.GUID = uuid.NewV4().String()
+	newReq := DelayedHttpRequest{}
+	newReq.GUID = uuid.NewV4().String()
 
-	json.NewDecoder(r.Body).Decode(&newRequest)
+	err := json.NewDecoder(r.Body).Decode(&newReq); if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Print(err)
+		return
+	}
 
-	delayedRequests[newRequest.GUID] = &newRequest
+	delayedReqs[newReq.GUID] = &newReq
 
-	go func (newRequest DelayedHttpRequest, delayedRequests *ResponseDelayedHttpRequestList) {
+	go func (newRequest DelayedHttpRequest, delayedReq *ResponseDelayedHttpRequestList) {
 		resp, err := handleRequest(newRequest.Uri, newRequest.Method, newRequest.Params, newRequest.Headers)
 
 		if err != nil {}
 
-		delayedRequests.loadResponse(newRequest.GUID, resp)
-	}(newRequest, &delayedRequests)
+		delayedReq.loadResponse(newRequest.GUID, resp)
+	}(newReq, &delayedReqs)
 
-	json.NewEncoder(w).Encode(newRequest)
+	json.NewEncoder(w).Encode(newReq)
+	r.Body.Close()
 }
 
 func ResponseAction (w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	guid := vars["guid"]
 
-	for _, request := range delayedRequests {
+	for _, request := range delayedReqs {
 		if request.GUID == guid {
 			json.NewEncoder(w).Encode(request.Response)
 			return
 		}
 	}
 
-	w.WriteHeader(http.StatusNotFound)
+	http.Error(w, "Request not found", 404)
 }
 
-func handleRequest(apiUrl string, method string, params []HttpParameter, headers []HttpHeader) (string, error) {
+func handleRequest(apiUrl string, method string, params []HttpParameter, headers []HttpHeader) ([]byte, error) {
 	data := url.Values{}
 
 	for _, param := range params {
@@ -138,13 +161,13 @@ func handleRequest(apiUrl string, method string, params []HttpParameter, headers
 	}
 
 	u, _ := url.ParseRequestURI(apiUrl)
-	urlStr := u.String()
+	url := u.String()
 
-	client := &http.Client{}
-	r, err := http.NewRequest(method, urlStr, bytes.NewBufferString(data.Encode()))
+	cl := &http.Client{}
+	r, err := http.NewRequest(method, url, bytes.NewBufferString(data.Encode()))
 
 	if err != nil {
-		return "", err
+		return []byte{}, err
 	}
 
 	for _, header := range headers {
@@ -153,11 +176,14 @@ func handleRequest(apiUrl string, method string, params []HttpParameter, headers
 
 	r.Header.Add("Content-Length", strconv.Itoa(len(data.Encode())))
 
-	resp, _ := client.Do(r)
+	resp, _ := cl.Do(r)
 	fmt.Println(resp.Status)
 
-	buf := bytes.Buffer{}
-	buf.ReadFrom(resp.Body)
+	defer resp.Body.Close()
 
-	return buf.String(), nil
+	res, err := ioutil.ReadAll(resp.Body); if err != nil {
+		return []byte{}, err
+	}
+
+	return res, nil
 }
