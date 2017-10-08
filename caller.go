@@ -54,8 +54,10 @@ func (this *ResponseDelayedHttpRequestList) loadResponse(guid string, resp strin
 	//current := &this[guid]
 
 	for _, current := range *this {
-		current.Response = Response{
-			Body: resp,
+		if current.GUID == guid {
+			current.Response = Response{
+				Body: resp,
+			}
 		}
 	}
 }
