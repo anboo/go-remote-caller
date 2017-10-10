@@ -7,11 +7,16 @@ import (
 	"net"
 	"bytes"
 	"fmt"
+	"encoding/json"
+	"os"
+	"log"
 )
 
 type CallerService struct {
 	UUID uuid.Uuid
 	IP   net.IP
+	CountryCode string
+	Key string
 }
 
 
@@ -70,17 +75,23 @@ func (this *RedisDataProvider) getClient() *redis.Client {
 			Password: this.Password, // no password set
 			DB:       this.DB,  // use default DB
 		})
+	} else {
+		/*
+		 * Try restart if connection session is expired
+		 */
+		_, err := this.Client.Ping().Result(); if err != nil {
+			this.Client = nil
+			return this.getClient()
+		}
 	}
+
+	defer this.Client.Close()
 
 	return this.Client
 }
 
 func (this *RedisDataProvider) get(key string) ([]byte, error) {
 	cl := this.getClient()
-
-	_, err := cl.Ping().Result(); if err != nil {
-		return []byte {}, err
-	}
 
 	data, err := cl.Get(key).Bytes(); if err != nil {
 		return []byte {}, err
@@ -92,10 +103,6 @@ func (this *RedisDataProvider) get(key string) ([]byte, error) {
 func (this *RedisDataProvider) set(key string, data []byte) error {
 	cl := this.getClient()
 
-	_, err := cl.Ping().Result(); if err != nil {
-		return err
-	}
-
 	res := cl.Set(key, data, time.Duration(0));
 
 	return res.Err()
@@ -104,12 +111,8 @@ func (this *RedisDataProvider) set(key string, data []byte) error {
 func (this *RedisDataProvider) has(key string) (bool, error) {
 	cl := this.getClient()
 
-	_, err := cl.Ping().Result(); if err != nil {
-		return false, err
-	}
-
 	res := cl.Get(key); if res.Err() != nil {
-		return false, err
+		return false, res.Err()
 	}
 
 	if len(res.Val()) == 0 {
@@ -120,12 +123,25 @@ func (this *RedisDataProvider) has(key string) (bool, error) {
 }
 
 func main() {
-	strg := RedisDataProvider{
-		DB: 1,
-		Address: "127.0.0.1:6636",
-		Password: "",
+
+}
+
+type Configuration struct {
+	redis struct {
+		addr string
+		db 	 string
+		pass int
+	}
+}
+
+func getConfig(key string) Configuration {
+	conf := Configuration{}
+
+	file, err := os.Open("config.json"); if err != nil {
+		log.Print("Error open configuration file")
 	}
 
-	strg.set("Nginx", bytes.NewBufferString("Hello from Server").Bytes())
-	fmt.Println(strg.get("Nginx"))
+	json.NewEncoder(file).Encode(&conf)
+
+	return conf
 }
