@@ -123,18 +123,32 @@ func (this *RedisDataProvider) has(key string) (bool, error) {
 }
 
 func main() {
+	conf := getConfig();
 
+	strg := RedisDataProvider{
+		DB: conf.redis.db,
+		Address: conf.redis.addr,
+		Password: conf.redis.pass,
+	}
+
+	strg.set("Nginx", bytes.NewBufferString("Hello from Server").Bytes())
+
+	data, err := strg.get("Nginx"); if err != nil {
+		fmt.Printf("Error %s", err.Error())
+	} else {
+		fmt.Printf("Result %s", data)
+	}
 }
 
 type Configuration struct {
 	redis struct {
 		addr string
-		db 	 string
-		pass int
+		db 	 int
+		pass string
 	}
 }
 
-func getConfig(key string) Configuration {
+func getConfig() Configuration {
 	conf := Configuration{}
 
 	file, err := os.Open("config.json"); if err != nil {
