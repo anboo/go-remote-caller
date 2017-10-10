@@ -151,8 +151,8 @@ type Configuration struct {
 func getConfig() Configuration {
 	conf := Configuration{}
 
-	file, err := os.Open("config.json"); if err != nil {
-		log.Print("Error open configuration file")
+	file, err := os.Open("conf.json"); if err != nil {
+		log.Printf("Error open configuration file: %s", err)
 	}
 
 	json.NewEncoder(file).Encode(&conf)
